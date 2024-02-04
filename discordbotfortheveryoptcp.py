@@ -89,4 +89,4 @@ async def stop(ctx):
     ctx.send(embed=embed)
 
 # Replace 'your_bot_token' with your actual bot token
-bot.run('OTA0MzY2MTcwMTQ3MjU4Mzg4.GcFnN9.Ebje2a4ZxGlXhOhpvBxW_92W6unlj1S8t8TQlo')
+bot.run('')
